@@ -1,0 +1,11 @@
+# Dependencias de Node
+node_modules
+
+# Variables de entorno
+.env
+
+# Archivos de configuración sensibles
+config/
+
+# Datos de sesión de WhatsApp (se manejarán con volúmenes)
+auth_info_baileys

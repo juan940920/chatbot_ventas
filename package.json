@@ -1,0 +1,23 @@
+{
+  "name": "prueba_n8n",
+  "version": "1.0.0",
+  "description": "proyecto para n8n para whatsap",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.12.2",
+    "baileys": "^6.7.20",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "form-data": "^4.0.4",
+    "googleapis": "^164.1.0",
+    "jimp": "^1.6.0",
+    "link-preview-js": "^3.1.0",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

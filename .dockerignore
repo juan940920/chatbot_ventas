@@ -1,0 +1,16 @@
+# Dependencias (se instalarán en el contenedor)
+node_modules
+
+# Archivos de configuración sensibles (no deben ir en la imagen)
+.env
+
+# Datos de sesión de WhatsApp (se manejarán con volúmenes)
+auth_info_baileys
+
+# Archivos de sistema y logs
+npm-debug.log*
+.git
+.gitignore
+README.md
+Dockerfile
+.dockerignore
