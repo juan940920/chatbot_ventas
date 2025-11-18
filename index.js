@@ -16,11 +16,31 @@ let empresaInfo = {}; // Variable para almacenar la info de la empresa
 let sock; // Variable global para el socket
 const userContext = {}; // Contexto de cada usuario
 
-// Iniciar el servidor en un puerto (ej. 3000)
+// Iniciar el servidor escuchando en TODAS las interfaces (necesario en Docker/EC2)
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Servidor HTTP para Baileys escuchando en el puerto ${PORT}`);
-    console.log(`Accede a http://localhost:${PORT}/qr para escanear el código QR`);
+const HOST = '0.0.0.0';   // ← ESTO ES LO QUE FALTABA
+
+app.listen(PORT, HOST, () => {
+    // Detectamos automáticamente la IP pública del EC2 para que se vea bonito en los logs
+    const os = require('os');
+    const networkInterfaces = os.networkInterfaces();
+    let publicIP = 'TU_IP_PÚBLICA_AQUÍ';
+
+    // Busca la IP pública (la que no es 127.0.0.1 ni 172.x.x.x en la mayoría de los casos)
+    Object.keys(networkInterfaces).forEach((iface) => {
+        networkInterfaces[iface].forEach((address) => {
+            if (address.family === 'IPv4' && !address.internal && !address.address.startsWith('172.')) {
+                publicIP = address.address;
+            }
+        });
+    });
+
+    console.log('================================================');
+    console.log('¡SERVIDOR ARRANCADO CORRECTAMENTE!');
+    console.log(`Puerto interno del contenedor : ${PORT}`);
+    console.log(`Escanea el QR aquí → http://${publicIP}:${PORT}/qr`);
+    console.log(`O también puedes usar    → http://localhost:3000/qr (si estás dentro del servidor)`);
+    console.log('================================================');
 });
 
 // --- RUTA PARA MOSTRAR EL QR ---
