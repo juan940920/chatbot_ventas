@@ -78,7 +78,9 @@ async function connectToWhatsApp() {
         version,
         printQRInTerminal: false,
         auth: state,
-        browser: Browsers.macOS('Desktop'),
+        browser: Browsers.ubuntu('Chrome'),   // ← ESTA LÍNEA CAMBIADA
+        markOnlineOnConnect: false,           // ayuda mucho
+        syncFullHistory: false,               // evita bloqueos
     });
 
     sock.ev.on("creds.update", saveCreds);
