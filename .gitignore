@@ -9,3 +9,5 @@ config/
 
 # Datos de sesión de WhatsApp (se manejarán con volúmenes)
 auth_info_baileys
+
+package-lock.json
