@@ -3,15 +3,14 @@ const { google } = require('googleapis');
 
 // Autenticación con Google Sheets
 const auth = new google.auth.GoogleAuth({
-    keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH, // Asegúrate de que esta ruta sea correcta
+    keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH,
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
 const sheets = google.sheets({ version: 'v4', auth });
 
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // Reemplázalo
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
-// Nombres de las hojas
 const SHEETS = {
     CLIENTES: 'Clientes',
     PRODUCTOS: 'Productos',
@@ -19,11 +18,10 @@ const SHEETS = {
     PEDIDOS: 'Pedidos'
 };
 
-// Función para agregar una fila a cualquier hoja
 async function appendRow(data, sheetName) {
     const request = {
         spreadsheetId: SPREADSHEET_ID,
-        range: `${sheetName}!A:Z`, // Escribe desde la columna A hasta la Z
+        range: `${sheetName}!A:Z`,
         valueInputOption: 'USER_ENTERED',
         resource: {
             values: [data],
@@ -107,7 +105,6 @@ async function getProductos(filtros = {}) {
             return [];
         }
 
-        // Mapeo de productos (solo campos esenciales)
         const productos = rows.map(row => ({
             ID_Producto: row[0],
             Nombre_Producto: row[1],
@@ -120,15 +117,14 @@ async function getProductos(filtros = {}) {
             Peso: row[8] || "",
             Dimension: row[9] || "",
             URL_Imagen: row[10] || "",
-            Estado: row[11] || ""
+            Caracteristica: row[11] || "",
+            Estado: row[12] || ""
         }));
 
         console.log(`getProductos - Total productos en base de datos: ${productos.length}`);
 
-        // Aplicar filtros básicos
         let productosFiltrados = productos;
 
-        // Filtro por categoría
         if (filtros.categoria) {
             const categoriaLower = filtros.categoria.toLowerCase();
             productosFiltrados = productosFiltrados.filter(p => 
@@ -137,7 +133,6 @@ async function getProductos(filtros = {}) {
             console.log(`Filtro por categoría "${filtros.categoria}": ${productosFiltrados.length} productos`);
         }
 
-        // Filtro por nombre (búsqueda en múltiples campos)
         if (filtros.nombre) {
             const busqueda = filtros.nombre.toLowerCase();
             productosFiltrados = productosFiltrados.filter(p => {
@@ -153,7 +148,6 @@ async function getProductos(filtros = {}) {
             console.log(`Filtro por nombre "${filtros.nombre}": ${productosFiltrados.length} productos`);
         }
 
-        // Filtro por marca
         if (filtros.marca) {
             const marcaLower = filtros.marca.toLowerCase();
             productosFiltrados = productosFiltrados.filter(p => 
@@ -162,7 +156,6 @@ async function getProductos(filtros = {}) {
             console.log(`Filtro por marca "${filtros.marca}": ${productosFiltrados.length} productos`);
         }
 
-        // Filtro por modelo
         if (filtros.modelo) {
             const modeloLower = filtros.modelo.toLowerCase();
             productosFiltrados = productosFiltrados.filter(p => 
@@ -171,7 +164,6 @@ async function getProductos(filtros = {}) {
             console.log(`Filtro por modelo "${filtros.modelo}": ${productosFiltrados.length} productos`);
         }
 
-        // Filtro por stock (solo productos con stock)
         if (filtros.conStock) {
             productosFiltrados = productosFiltrados.filter(p => 
                 parseInt(p.Stock) > 0
@@ -179,20 +171,17 @@ async function getProductos(filtros = {}) {
             console.log(`Filtro por stock (solo con stock): ${productosFiltrados.length} productos`);
         }
 
-        // --- NUEVO: Filtro por precio máximo ---
         if (filtros.precio_maximo) {
             const precioMaximo = parseFloat(filtros.precio_maximo);
             productosFiltrados = productosFiltrados.filter(p => {
-                // Limpiamos el precio de símbolos como '$' o ',' antes de convertirlo a número
+                
                 const precioNumerico = parseFloat(p.Precio.replace(/[^0-9.-]+/g, ""));
                 
-                // Verificamos que el precio sea un número válido y que sea menor o igual al máximo
                 return !isNaN(precioNumerico) && precioNumerico <= precioMaximo;
             });
             console.log(`Filtro por precio máximo (hasta ${precioMaximo}): ${productosFiltrados.length} productos`);
         }
 
-        // Aplicar límite
         if (filtros.limite) {
             const limiteAntes = productosFiltrados.length;
             productosFiltrados = productosFiltrados.slice(0, filtros.limite);
@@ -315,11 +304,10 @@ async function getEmpresaInfo() {
 
     } catch (error) {
         console.error("Error al leer la información de la empresa:", error);
-        return {}; // Devolvemos un objeto vacío en caso de error
+        return {};
     }
 }
 
-// Exportar la función y los nombres de hojas para usarlos en otros archivos
 module.exports = {
     appendRow,
     findContactByPhone,

@@ -1,474 +1,437 @@
-const { makeWASocket, useMultiFileAuthState, Browsers, DisconnectReason, fetchLatestBaileysVersion, delay } = require('baileys');
+const { 
+    makeWASocket, 
+    useMultiFileAuthState, 
+    Browsers, 
+    DisconnectReason, 
+    fetchLatestBaileysVersion, 
+    delay 
+} = require('baileys');
 const QRCode = require('qrcode-terminal');
 const qrcode = require('qrcode');
 const axios = require('axios');
 const express = require('express');
 require('dotenv').config();
 
-const { createContactIfNotExists, getProductos, registrarPedido, actualizarStock, getEmpresaInfo } = require('./sheets');
+const { 
+    createContactIfNotExists, 
+    getProductos, 
+    registrarPedido, 
+    actualizarStock, 
+    getEmpresaInfo 
+} = require('./sheets');
 
 const app = express();
 app.use(express.json());
 
 // --- VARIABLES GLOBALES ---
-let latestQR = ''; // Variable para almacenar el QR más reciente
-let empresaInfo = {}; // Variable para almacenar la info de la empresa
-let sock; // Variable global para el socket
-const userContext = {}; // Contexto de cada usuario
+let latestQR = '';
+let empresaInfo = {};
+let sock = null;
+const userContext = new Map();
 
-// Iniciar el servidor en un puerto (ej. 3000)
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-    console.log(`Servidor HTTP para Baileys escuchando en el puerto ${PORT}`);
-    console.log(`Accede a http://localhost:${PORT}/qr para escanear el código QR`);
+    console.log(`Servidor corriendo en http://localhost:${PORT}`);
+    console.log(`Escanea el QR en: http://localhost:${PORT}/qr`);
 });
 
-// --- RUTA PARA MOSTRAR EL QR ---
+// --- RUTA QR ---
 app.get('/qr', (req, res) => {
     if (latestQR) {
         res.send(`
             <!DOCTYPE html>
-            <html>
-            <head><title>Escanea el QR para WhatsApp</title>
-                <style>body { font-family: Arial; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-                    .container { text-align: center; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-                    h1 { color: #128C7E; } img { max-width: 300px; border: 5px solid #128C7E; border-radius: 10px; } p { color: #555; }
+            <html lang="es">
+            <head>
+                <meta charset="utf-8">
+                <title>WhatsApp Bot - Escanear QR</title>
+                <style>
+                    body {font-family: Arial; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;}
+                    .box {text-align: center; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 8px 25px rgba(0,0,0,0.15);}
+                    h1 {color: #128C7E;}
+                    img {max-width: 320px; border: 6px solid #128C7E; border-radius: 12px; margin: 20px 0;}
+                    p {color: #555; line-height: 1.5;}
                 </style>
             </head>
             <body>
-                <div class="container">
-                    <h1>Escanea este código QR con WhatsApp</h1>
-                    <img src="${latestQR}" alt="Código QR de WhatsApp">
-                    <p>Abre WhatsApp > Menu > Dispositivos Vinculados > Vincular un dispositivo</p>
+                <div class="box">
+                    <h1>Escanea este código QR</h1>
+                    <img src="${latestQR}" alt="QR WhatsApp">
+                    <p>WhatsApp → Menú → Dispositivos vinculados → Vincular dispositivo</p>
+                    <small>Se actualizará automáticamente...</small>
                 </div>
+                <script>setTimeout(()=>location.reload(), 15000)</script>
             </body>
             </html>
         `);
     } else {
-        res.status(404).send('El código QR aún no se ha generado. Por favor, espera...');
+        res.send('<h2>Generando QR... espera un momento</h2><script>setTimeout(()=>location.reload(), 3000)</script>');
     }
 });
 
-// --- FUNCIÓN DE CONEXIÓN A WHATSAPP ---
+// --- CONEXIÓN A WHATSAPP ---
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
-    
+
     sock = makeWASocket({
         version,
         browser: Browsers.windows('Chrome'),
         auth: state,
         printQRInTerminal: false,
         syncFullHistory: false,
-        markOnlineOnConnect: true
+        markOnlineOnConnect: true,
+        connectTimeoutMs: 60_000,
+        defaultQueryTimeoutMs: 60_000
     });
 
-    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
+
         if (qr) {
             qrcode.toDataURL(qr, (err, url) => {
-                if (err) { console.error("Error al generar el QR:", err); return; }
-                latestQR = url;
-                console.log("¡Código QR generado! Escanéalo en: http://localhost:" + PORT + "/qr");
+                if (!err) {
+                    latestQR = url;
+                    console.log(`QR listo → http://localhost:${PORT}/qr`);
+                }
             });
             QRCode.generate(qr, { small: true });
         }
+
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log('Conexión cerrada, reconectando...');
-                latestQR = '';
-                connectToWhatsApp();
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            if (statusCode !== DisconnectReason.loggedOut) {
+                console.log('Reconectando en 5 segundos...');
+                setTimeout(connectToWhatsApp, 5000);
+            } else {
+                console.log('Sesión cerrada. Borra la carpeta "auth_info_baileys" y vuelve a escanear.');
             }
         } else if (connection === 'open') {
-            console.log("¡CONEXIÓN ABIERTA!");
+            console.log('¡Conectado a WhatsApp correctamente!');
             latestQR = '';
         }
     });
 
-    // --- LÓGICA DE MENSAJES ---
-    sock.ev.on("messages.upsert", async (event) => {
-        for (const m of event.messages) {
-            const id = m.key.remoteJid;
-            const nombre = m.pushName;
-            
-            if(event.type != 'notify' || m.key.fromMe || id.includes('@g.us') || id.includes('@broadcast')) return;
-        
-            let mensaje = (m.message?.conversation || m.message?.extendedTextMessage?.text || "").toUpperCase();
-            console.log(`[${id}] Mensaje recibido: ${mensaje}`);
+    // --- RECEPCIÓN DE MENSAJES ---
+    sock.ev.on('messages.upsert', async (event) => {
+        if (event.type !== 'notify') return;
 
-            // --- NUEVO: COMPROBACIÓN PARA VOLVER AL MENÚ PRINCIPAL ---
-            if (mensaje === 'MENU' || mensaje === 'SALIR') {
-                userContext[id].menuActual = "main";
-                await enviarMenu(sock, id, "main", nombre);
-                return; // Detenemos el procesamiento de este mensaje
-            }
+        for (const m of event.messages) {
+            if (m.key.fromMe || m.key.remoteJid.endsWith('@g.us') || m.key.remoteJid.includes('@broadcast')) continue;
+
+            const id = m.key.remoteJid;
+            const nombre = m.pushName || 'Cliente';
+            const mensajeRaw = (m.message?.conversation || m.message?.extendedTextMessage?.text || '').trim();
+            const mensaje = mensajeRaw.toUpperCase().trim();
+
+            console.log(`[${id}] ${nombre}: ${mensajeRaw}`);
 
             await sock.readMessages([m.key]);
-            await delay(100);
-            await sock.sendPresenceUpdate("composing", id);
-            await delay(400);
-            
-            await createContactIfNotExists(id, nombre);
-            
-            if(!userContext[id]){
-                userContext[id] = { menuActual: "main" };
-                await enviarMenu(sock, id, "main", nombre);
-                return;
+            await sock.sendPresenceUpdate('composing', id);
+            await delay(600);
+
+            // Inicializar contexto
+            if (!userContext.has(id)) {
+                userContext.set(id, {
+                    menuActual: 'main',
+                    carrito: [],
+                    productosRecientes: [],
+                    list_mensajes: []
+                });
+            }
+            const ctx = userContext.get(id);
+
+            // Comando universal
+            if (['MENU', 'MENÚ', 'SALIR', 'CANCELAR'].includes(mensaje)) {
+                ctx.menuActual = 'main';
+                ctx.carrito = [];
+                ctx.productosRecientes = [];
+                ctx.list_mensajes = [];
+                await enviarMenu(sock, id, 'main', nombre);
+                continue;
             }
 
-            const menuActual = userContext[id].menuActual;
-            const menu = menuData[menuActual];
-            const opcionSelecionada = menu.options[mensaje];
+            await createContactIfNotExists(id.replace('@s.whatsapp.net', ''), nombre);
 
-            // 1. MANEJAR NAVEGACIÓN A SUBMENÚS
-            if (opcionSelecionada && opcionSelecionada.submenu) {
-                userContext[id].menuActual = opcionSelecionada.submenu;
-                await enviarMenu(sock, id, opcionSelecionada.submenu);
-                return;
-            }
-
-            // 2. MANEJAR BÚSQUEDA DE PRODUCTOS
-            if (menuActual === "buscar_producto") {
-                const respuesta = await conectarConOpenAI(mensaje, id);
-                await sock.sendMessage(id, { text: respuesta });
-                return;
-            }
-            
-            // 3. MANEJAR RESPUESTAS DINÁMICAS DEL MENÚ PRINCIPAL
-            let respuestaFinal = null;
-            if (menuActual === 'main' && opcionSelecionada) {
-                const opcionKey = mensaje; // 'A', 'B', 'C', etc.
-                switch (opcionKey) {
-                    case 'B': // Ubicación
-                        respuestaFinal = {
-                            tipo: "text",
-                            msg: `📍 *Nuestra Dirección*\n${empresaInfo.direccion || 'Dirección no disponible'}\n\n🗺️ *Ver en Google Maps:*\n${empresaInfo.enlaces_maps || 'Link no disponible'}`
-                        };
-                        break;
-                    case 'C': // Horarios
-                        respuestaFinal = {
-                            tipo: "text",
-                            msg: `⏰ *NUESTRO HORARIO DE ATENCIÓN*\n\n${empresaInfo.horario || 'No definido'}\n\n*¡Te esperamos!* 🛍️`
-                        };
-                        break;
-                    case 'D': // Contacto
-                        respuestaFinal = {
-                            tipo: "text",
-                            msg: `📞 *INFORMACIÓN DE CONTACTO*\n\n📱 *WHATSAPP*\n${empresaInfo.contacto_whatsapp || 'No disponible'}\n\n📧 *EMAIL*\n${empresaInfo.correo_electronico || 'No disponible'}\n\n🌐 *PÁGINA WEB*\n${empresaInfo.contacto_web || 'No disponible'}\n\n*Estamos para servirte* 💼`
-                        };
-                        break;
-                    case 'E': // Catalogo
-                        const catalogoUrl = empresaInfo.catalogo_url;
-                        const catalogoNombre = empresaInfo.catalogo_nombre || "catalogo.pdf";
-
-                        if (catalogoUrl) {
-                            await sock.sendMessage(id, {
-                                document: { url: catalogoUrl },
-                                fileName: catalogoNombre,
-                                caption: "📄 *Aquí tienes nuestro catálogo completo.*\n\nDescárgalo para ver todos nuestros productos y sus detalles."
-                            });
-                        } else {
-                            await sock.sendMessage(id, { text: "❌ Lo sentimos, el catálogo no está disponible en este momento." });
-                        }
-                        return;
+            // Menú principal
+            if (ctx.menuActual === 'main') {
+                const opcion = menuData.main.options[mensaje];
+                if (!opcion) {
+                    await sock.sendMessage(id, { text: "❌ Opción no válida.\nEscribe *MENU* para ver las opciones disponibles." });
+                    continue;
                 }
+
+                if (opcion.submenu) {
+                    ctx.menuActual = opcion.submenu;
+                    await enviarMenu(sock, id, opcion.submenu, nombre);
+                } else {
+                    await manejarOpcionRapida(sock, id, mensaje);
+                }
+                continue;
             }
 
-            if (respuestaFinal) {
-                await sock.sendMessage(id, { [respuestaFinal.tipo]: respuestaFinal.msg });
-            } else if (menuActual === 'main' && !opcionSelecionada) {
-                await sock.sendMessage(id, {text: "Por favor, elige una opción del menú"});
+            // Submenú de búsqueda
+            if (ctx.menuActual === 'buscar_producto') {
+                const respuesta = await conectarConOpenAI(mensajeRaw.toLowerCase(), id);
+                await sock.sendMessage(id, { text: respuesta });
+                continue;
             }
         }
     });
 }
 
-// --- FUNCIÓN DE INICIALIZACIÓN DE LA APLICACIÓN ---
-async function initializeApp() {
-    console.log("Cargando configuración desde Google Sheets...");
-    empresaInfo = await getEmpresaInfo();
-    if (Object.keys(empresaInfo).length === 0) {
-        console.warn("ADVERTENCIA: No se pudo cargar la información de la empresa. Se usarán valores por defecto.");
+// --- OPCIONES RÁPIDAS ---
+async function manejarOpcionRapida(sock, id, opcionKey) {
+    let texto = '';
+
+    switch (opcionKey) {
+        case 'B':
+            texto = `📍 *Nuestra Ubicación*\n\n${empresaInfo.direccion || 'No disponible'}\n\n🗺️ Ver en Maps:\n${empresaInfo.enlaces_maps || 'Link no disponible'}`;
+            break;
+        case 'C':
+            texto = `⏰ *Horarios de Atención*\n\n${empresaInfo.horario || 'Lun-Vie 9:00-18:00 | Sáb 9:00-13:00'}\n\n¡Te esperamos!`;
+            break;
+        case 'D':
+            texto = `📞 *Información de Contacto*\n\n📱 WhatsApp: ${empresaInfo.contacto_whatsapp || 'Este número'}\n📧 Email: ${empresaInfo.correo_electronico || 'No disponible'}\n🌐 Web: ${empresaInfo.contacto_web || 'No disponible'}`;
+            break;
+        case 'E':
+            if (empresaInfo.catalogo_url) {
+                await sock.sendMessage(id, {
+                    document: { url: empresaInfo.catalogo_url },
+                    fileName: empresaInfo.catalogo_nombre || "Catálogo.pdf",
+                    caption: "📄 Aquí tienes nuestro catálogo completo en PDF.\n¡Explora todos nuestros productos!"
+                });
+                return;
+            } else {
+                texto = "❌ El catálogo no está disponible en este momento.";
+            }
+            break;
+        default:
+            texto = "Opción en mantenimiento.";
     }
-    console.log("Configuración cargada. Iniciando conexión a WhatsApp...");
-    connectToWhatsApp();
+    await sock.sendMessage(id, { text: texto });
 }
 
-// --- FUNCIÓN PARA ENVIAR MENÚS ---
-async function enviarMenu(sock, id, menuKey, nombre) {
-    let menuMensaje = '';
-    console.log("nombre nombre nombre: ", id);
-    
-    
+// --- ENVIAR MENÚ ---
+async function enviarMenu(sock, id, menuKey, nombre = '') {
+    let texto = '';
+
     if (menuKey === 'main') {
-        const nombreEmpresa = empresaInfo.nombre || '[Nombre de la empresa]';
-        const bienvenida = `¡Hola ${nombre}, bienvenido a *${nombreEmpresa}*! \nTu destino para las mejores ofertas tecnológicas:`;
-        
-        const optionText = Object.entries(menuData[menuKey].options)
-                                    .map(([key, option]) => `- 👉 *${key}*: ${option.text}`)
-                                    .join("\n");
-        
-        menuMensaje = `${bienvenida}\n\n${optionText}\n\n> *Escribe una opción!*`;
-    } else {
-        const menu = menuData[menuKey];
-        const optionText = Object.entries(menu.options)
-                                    .map(([key, option]) => `- 👉 *${key}*: ${option.text}`)
-                                    .join("\n");
-        menuMensaje = `${menu.mensaje}\n\n${optionText}\n\n> *Escribe una opción!*`;
+        const nombreEmpresa = empresaInfo.nombre || 'Nuestra Tienda';
+        texto = `¡Hola${nombre ? ' ' + nombre : ''}! 👋\n\nBienvenido a *${nombreEmpresa}* 🔥\n\n¿Qué necesitas hoy?\n\n`;
+        texto += Object.entries(menuData.main.options)
+            .map(([key, opt]) => `*${key}* ${opt.text}`)
+            .join('\n');
+        texto += '\n\n_Escribe solo la letra_';
+    } else if (menuKey === 'buscar_producto') {
+        texto = menuData.buscar_producto.mensaje;
     }
 
-    await sock.sendMessage(id, {text: menuMensaje});
+    await sock.sendMessage(id, { text: texto });
 }
 
-// --- ESTRUCTURA DE MENÚS (SIMPLIFICADA) ---
+// --- MENÚS ---
 const menuData = {
     main: {
         options: {
-            A: { text: "🔥 OFERTAS - Ver productos", submenu: "buscar_producto" },
-            B: { text: "📍 UBICACIÓN - ¿Dónde encontramos?" },
-            C: { text: "🕘 HORARIOS - ¿Cuándo atendemos?" },
-            D: { text: "📞 CONTACTO - Hablemos" },
-            E: { text: "🔍 CATÁLOGO - ver productos" },
+            'A': { text: '🔥 Ver productos y ofertas', submenu: 'buscar_producto' },
+            'B': { text: '📍 ¿Dónde estamos?', action: 'ubicacion' },
+            'C': { text: '🕒 Horarios de atención', action: 'horarios' },
+            'D': { text: '📞 Contacto e info', action: 'contacto' },
+            'E': { text: '📄 Ver catálogo PDF', action: 'catalogo' }
         }
     },
     buscar_producto: {
-        mensaje: `Estoy aquí para ayudarte a encontrar el producto perfecto.
-Solo dime qué buscas. Puedes ser tan específico como quieras:
-• "celular Honor"
-• "laptop para trabajo"
-• "audífonos hasta $50"
----
-🤖 **Mis comandos son:**
-   \`agregar [número producto], cantidad [número]\` -> Añade al carrito.
-   \`finalizar\` o \`terminar\` -> Termina tu compra.
-   \`menu\` o \`salir\` -> Vuelve al menú principal.`,
-        options: {}
+        mensaje: `🔍 *¿Qué producto estás buscando?*\n\nPuedes escribir:\n• Celular Samsung\n• Laptop gamer hasta 800$\n• TV 55 pulgadas\n\n🛒 *Comandos especiales:*\n• \`agregar 3\` → añade el producto #3\n• \`agregar 2, cantidad 5\` → cantidad personalizada\n• \`finalizar\` → completar pedido\n• \`menu\` → volver al inicio`
     }
 };
 
-// La función conectarConOpenAI y el resto de tu código permanecen igual.
-// ... (Pega aquí tu función conectarConOpenAI completa) ...
-
-async function conectarConOpenAI(mensaje, id) {
-    const TOKEN = process.env.OPENAI_API_KEY; 
-    
-    const mensajeLower = mensaje.toLowerCase().trim();
-    console.log(`[DEBUG] Mensaje recibido de ${id}: "${mensaje}"`);
+// --- BÚSQUEDA CON OPENAI + CARRITO ---
+async function conectarConOpenAI(mensajeOriginal, id) {
+    const ctx = userContext.get(id);
+    const TOKEN = process.env.OPENAI_API_KEY;
 
     try {
-        if (!userContext[id]?.carrito) {
-            userContext[id] = userContext[id] || {};
-            userContext[id].carrito = [];
-        }
+        // Inicializar historial
+        if (!ctx.list_mensajes || ctx.list_mensajes.length === 0) {
+            ctx.list_mensajes = [{
+                role: "system",
+                content: `Eres un experto en ventas de tecnología. Tu única función es entender búsquedas de productos y devolver un JSON con los filtros. NO respondas nada más.
 
-        if (mensajeLower.includes("agregar") || mensajeLower.includes("llevar")) {
-            console.log("[DEBUG] Entrando en la lógica de AGREGAR.");
-            if (!userContext[id]?.productosRecientes || userContext[id].productosRecientes.length === 0) {
-                return "Primero busca un producto para poder agregarlo al carrito.";
-            }
-            const productos = userContext[id].productosRecientes;
-            const numerosEnMensaje = mensaje.match(/\d+/g);
-            if (!numerosEnMensaje || numerosEnMensaje.length === 0) {
-                return "❌ No entendí qué producto quieres agregar. Por favor, indica el número del producto. Ejemplo: `agregar 3`";
-            }
-            const productoIndex = parseInt(numerosEnMensaje[0]) - 1;
-            if (productoIndex < 0 || productoIndex >= productos.length) {
-                return `❌ Número de producto no válido. Elige un número entre 1 y ${productos.length}.`;
-            }
-            let cantidad = 1;
-            if (numerosEnMensaje.length > 1) {
-                cantidad = parseInt(numerosEnMensaje[1]);
-            }
-            const cantidadConPalabra = mensajeLower.match(/cantidad\s+(\d+)/);
-            if (cantidadConPalabra) {
-                cantidad = parseInt(cantidadConPalabra[1]);
-            }
-            const productoSeleccionado = productos[productoIndex];
-            const stockActual = parseInt(productoSeleccionado.Stock);
-            if (cantidad > stockActual) {
-                return `⚠️ Stock insuficiente. Disponibles: ${stockActual} unidades de "${productoSeleccionado.Nombre_Producto}".\n\nIntenta con una cantidad menor.`;
-            } else {
-                const itemCarrito = {
-                    ID_Producto: productoSeleccionado.ID_Producto,
-                    Nombre: productoSeleccionado.Nombre_Producto,
-                    Stock: productoSeleccionado.Stock,
-                    Cantidad: cantidad,
-                    PrecioUnitario: parseFloat(productoSeleccionado.Precio)
-                };
-                const existingItem = userContext[id].carrito.find(item => item.ID_Producto === productoSeleccionado.ID_Producto);
-                if (existingItem) {
-                    existingItem.Cantidad += cantidad;
-                } else {
-                    userContext[id].carrito.push(itemCarrito);
-                }
-                const confirmacion = `✅ Agregado al carrito: ${cantidad} x ${productoSeleccionado.Nombre_Producto} - $${productoSeleccionado.Precio}`;
-                const resumenCarrito = userContext[id].carrito.map(item => {
-                    const subtotal = item.Cantidad * item.PrecioUnitario;
-                    return `• ${item.Nombre} (x${item.Cantidad}) - $${subtotal.toFixed(2)}`;
-                }).join('\n');
-                const totalCarrito = userContext[id].carrito.reduce((total, item) => {
-                    return total + (item.Cantidad * item.PrecioUnitario);
-                }, 0);
-                const respuestaFinal = `${confirmacion}\n\n` +
-                                    `🛒 *Tu carrito ahora:*\n` +
-                                    `${resumenCarrito}\n\n` +
-                                    `💰 *Total a pagar: $${totalCarrito.toFixed(2)}*\n\n` +
-                                    `Puedes seguir comprando o escribe \`finalizar\` para tu pedido.`;
-                return respuestaFinal;
-            }
-        }
-
-        if (mensajeLower.includes("finalizar") || mensajeLower.includes("terminar")) {
-            console.log("[DEBUG] Entrando en la lógica de FINALIZAR.");
-            if (userContext[id].carrito.length === 0) {
-                return "⚠️ Tu carrito está vacío. Agrega productos antes de finalizar.";
-            } else {
-                const total = userContext[id].carrito.reduce((sum, item) => sum + (item.Cantidad * item.PrecioUnitario), 0);
-                const pedido = {
-                    ID_Pedido: Date.now().toString(),
-                    Timestamp: new Date().toISOString(),
-                    ID_Cliente: id,
-                    carrito: userContext[id].carrito,
-                    Estado: "Pendiente"
-                };
-                const registrado = await registrarPedido(pedido);
-                if (registrado) {
-                    for (const item of userContext[id].carrito) {
-                        const nuevoStock = parseInt(item.Stock) - item.Cantidad;
-                        await actualizarStock(item.ID_Producto, nuevoStock); 
-                    }
-                    const respuestaFinal = `✅ Pedido registrado! ID: ${pedido.ID_Pedido}\n💰 Total: $${total.toFixed(2)}\n📦 Productos: ${userContext[id].carrito.length}`;
-                    userContext[id].carrito = [];
-                    return respuestaFinal;
-                } else {
-                    return "❌ Error al registrar el pedido.";
-                }
-            }
-        }
-        
-        if (!userContext[id]?.list_mensajes) {
-            userContext[id].list_mensajes = [
+                Formato obligatorio:
                 {
-                    "role": "system",
-                    // --- INICIO DEL PROMPT MODIFICADO CON PRECIO ---
-                    "content": `Eres un experto en ventas especializado en la búsqueda de productos. Tu ÚNICA y EXCLUSIVA función es analizar las solicitudes de los clientes para encontrar productos. NO eres un asistente general. NO respondes preguntas sobre otros temas, NO mantienes conversaciones y NO inventes información.
-
-                    REGLA FUNDAMENTAL: Si el mensaje del usuario NO es una búsqueda de producto (por ejemplo, un saludo, una pregunta personal, un comentario, etc.), NO debes intentar ayudar. Debes indicar que no entendiste la solicitud relacionada con productos.
-
-                    INSTRUCCIONES DE BÚSQUEDA (solo si aplica):
-
-                    1.  **OBJETIVO PRINCIPAL: Identificar el Producto, su Categoría y su Precio Máximo.**
-                        Tu tarea es extraer el nombre específico del producto, su categoría y el precio máximo si se menciona.
-
-                    2.  **EXTRAE \`nombre_producto\`:**
-                        Identifica el nombre del producto, la marca o el modelo específico mencionado. Ignora las palabras genéricas de categoría y las referencias a precio.
-                        *   Ejemplo: En "quiero un celular honor", el nombre del producto es "honor".
-
-                    3.  **EXTRAE \`categoria\`:**
-                        Identifica la categoría del producto buscando palabras clave específicas en la solicitud.
-                        *   **Lista de categorías conocidas:** "celular", "smartphone", "laptop", "computadora", "notebook", "tablet", "audífonos", "auriculares", "televisor", "smart tv", "smartwatch", "reloj inteligente", "parlante", "bocina", "consola", "videojuego".
-
-                    4.  **EXTRAE \`precio_maximo\`:**
-                        Identifica el límite de precio que el usuario está dispuesto a pagar. Busca frases como "de menos de", "hasta", "por debajo de", "más o menos", "alrededor de", "cerca de", seguidas de un número y un símbolo de moneda (opcional). Extrae SOLO el valor numérico.
-                        *   Ejemplo: En "un celular de mas o menos 1000$", el precio máximo es 1000.
-                        *   Ejemplo: En "laptops hasta 500 dolares", el precio máximo es 500.
-                        *   Si no se menciona un límite de precio, el valor debe ser null.
-
-                    5.  **EXTRAE INFORMACIÓN ADICIONAL (solo con palabras clave explícitas):**
-                        Extrae la información adicional ÚNICAMENTE si el cliente usa las palabras clave explícitas.
-                        *   Si el cliente dice la palabra **"marca"**, extrae lo que sigue.
-                        *   Si el cliente dice la palabra **"modelo"**, extrae lo que sigue.
-
-                    FORMATO DE SALIDA OBLIGATORIO:
-                    Responde ÚNICAMENTE con un objeto JSON que tenga esta estructura exacta.
-                    {
-                        "nombre_producto": "el nombre específico del producto o null",
-                        "categoria": "la categoría identificada o null",
-                        "precio_maximo": "el precio máximo numérico o null",
-                        "marca": "la marca (solo si se usa la palabra clave) o null",
-                        "modelo": "el modelo (solo si se usa la palabra clave) o null",
-                        "respuesta_breve": "una confirmación de búsqueda o un mensaje de no entendido, en 15 palabras máximo"
-                    }
-
-                    EJEMPLOS DE BÚSQUEDA VÁLIDA:
-                    - Entrada: "quiero un celular de mas o menos 1000$ que me ofreces"
-                    - Salida: { "nombre_producto": null, "categoria": "celular", "precio_maximo": 1000, "marca": null, "modelo": null, "respuesta_breve": "Buscando celulares de hasta 1000 para ti." }
-
-                    - Entrada: "necesito una laptop dell inspiron"
-                    - Salida: { "nombre_producto": "dell inspiron", "categoria": "laptop", "precio_maximo": null, "marca": null, "modelo": null, "respuesta_breve": "Buscando laptops Dell Inspiron para ti." }
-
-                    - Entrada: "audífonos por debajo de 50"
-                    - Salida: { "nombre_producto": null, "categoria": "audífonos", "precio_maximo": 50, "marca": null, "modelo": null, "respuesta_breve": "Mostrando audífonos con precios menores a 50." }
-
-                    EJEMPLOS DE CONSULTA INVÁLIDA (FUERA DE TEMA):
-                    - Entrada: "¿Qué tiempo hace hoy?"
-                    - Salida: { "nombre_producto": null, "categoria": null, "precio_maximo": null, "marca": null, "modelo": null, "respuesta_breve": "No entendí tu solicitud. Por favor, dime qué producto buscas." }`
-                    // --- FIN DEL PROMPT MODIFICADO ---
+                    "nombre_producto": "nombre o marca/modelo específico o null",
+                    "categoria": "celular|laptop|audífonos|televisor|tablet|smartwatch|parlante|null",
+                    "precio_maximo": número o null,
+                    "marca": "solo si dice explícitamente 'marca Samsung' o similar, sino null",
+                    "modelo": "solo si dice 'modelo X' o similar, sino null",
+                    "respuesta_breve": "máximo 12 palabras confirmando la búsqueda"
                 }
-            ];
+
+                Ejemplos válidos:
+                - "celular hasta 500$" → {"categoria":"celular","precio_maximo":500,"respuesta_breve":"Buscando celulares hasta $500"}
+                - "laptop dell" → {"nombre_producto":"dell","categoria":"laptop","respuesta_breve":"Mostrando laptops Dell"}
+                - "audífonos" → {"categoria":"audífonos","respuesta_breve":"Aquí tienes audífonos disponibles"}
+
+                Si no es una búsqueda de producto → devuelve todo null y respuesta_breve = "No entendí qué buscas."`
+            }];
         }
 
-        userContext[id].list_mensajes.push({ "role": "user", "content": mensaje });
+        const msg = mensajeOriginal.trim();
 
-        const { data } = await axios.post("https://api.openai.com/v1/chat/completions", {
-            "model": "gpt-3.5-turbo-1106",
-            "messages": userContext[id].list_mensajes,
-            "response_format": { "type": "json_object" },
-            "temperature": 0.1
+        // COMANDOS DEL CARRITO
+        if (msg.includes('agregar')) {
+            return await manejarAgregarCarrito(msg, id);
+        }
+
+        if (msg.includes('finalizar') || msg.includes('terminar')) {
+            return await manejarFinalizarPedido(id);
+        }
+
+        // Búsqueda normal
+        ctx.list_mensajes.push({ role: "user", content: msg });
+
+        const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: "gpt-3.5-turbo-1106",
+            messages: ctx.list_mensajes,
+            response_format: { type: "json_object" },
+            temperature: 0.2,
+            max_tokens: 300
         }, {
-            headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN }
+            headers: { Authorization: `Bearer ${TOKEN}` }
         });
 
-        const filtrosIA = JSON.parse(data.choices[0].message.content);
-        userContext[id].list_mensajes.push({ "role": "assistant", "content": JSON.stringify(filtrosIA) });
+        const ia = JSON.parse(response.data.choices[0].message.content);
+        ctx.list_mensajes.push({ role: "assistant", content: JSON.stringify(ia) });
 
-        console.log("este son los filtros de IA" , filtrosIA);
+        console.log("mensaje ia", ia);
         
 
-        if (!filtrosIA.categoria && !filtrosIA.nombre_producto && !filtrosIA.marca && !filtrosIA.modelo && !filtrosIA.precio_maximo) {
-            return filtrosIA.respuesta_breve || "No entendí tu búsqueda. ¿Puedes darme más detalles sobre el producto que buscas?";
+        // Limpiar historial
+        if (ctx.list_mensajes.length > 20) {
+            ctx.list_mensajes = [ctx.list_mensajes[0], ...ctx.list_mensajes.slice(-12)];
         }
 
-        const filtrosBusqueda = {
-            categoria: filtrosIA.categoria,
-            nombre: filtrosIA.nombre_producto,
-            marca: filtrosIA.marca,
-            modelo: filtrosIA.modelo,
-            precio_maximo: filtrosIA.precio_maximo,
+        if (!ia.categoria && !ia.nombre_producto && !ia.precio_maximo) {
+            return "❌ No entendí qué producto buscas.\nPrueba con: *celular*, *laptop hasta 600*, *audífonos*";
+        }
+
+        const filtros = {
+            categoria: ia.categoria || null,
+            nombre: ia.nombre_producto || null,
+            precio_maximo: ia.precio_maximo || null,
+            marca: ia.marca || null,
+            modelo: ia.modelo || null,
             conStock: true,
             limite: 10
         };
 
-        const productosEncontrados = await getProductos(filtrosBusqueda);
-        console.log(`Productos encontrados: ${productosEncontrados.length}`);
-        userContext[id].productosRecientes = productosEncontrados;
+        const productos = await getProductos(filtros);
+        ctx.productosRecientes = productos;
 
-        if (productosEncontrados.length === 0) {
-            return `${filtrosIA.respuesta_breve}\n\nNo encontré productos que coincidan con tu búsqueda.`;
+        if (productos.length === 0) {
+            return `${ia.respuesta_breve || 'Busqué pero no encontré nada'}\n\nPrueba con otros términos.`;
         }
 
-        const resumenProductos = productosEncontrados.map((p, i) => {
-            let infoAdicional = "";
-            if (p.Marca) infoAdicional += ` Marca: ${p.Marca}`;
-            if (p.Modelo) infoAdicional += `, Modelo: ${p.Modelo}`;
-            if (p.URL_Imagen) infoAdicional += `, Modelo: ${p.URL_Imagen}`;
-            return `👉 ${i + 1}. ${p.Nombre_Producto} - $${p.Precio} (Stock: ${p.Stock} ${p.Unidad_Medida})${infoAdicional ? ` [${infoAdicional}]` : ''}`;
-        }).join('\n');
+        const lista = productos.map((p, i) => {
+            let extra = p.Marca ? ` | ${p.Marca}` : '';
+            extra += p.Modelo ? ` ${p.Modelo}` : '';
+            extra += p.Caracteristica ?  ` | ${p.Caracteristica}` : '';
+            return `${i + 1}. *${p.Nombre_Producto}*\n   $${p.Precio} | Stock: ${p.Stock}${extra}`;
+        }).join('\n\n');
 
-        let respuestaFinal = `${filtrosIA.respuesta_breve}\n\n${resumenProductos}\n\n`;
-        respuestaFinal += `Escribe *\`agregar 2, cantidad 10\`* para añadir al carrito o escribe \`finalizar\` para finalizar tu pedido.`;
+        return `${ia.respuesta_breve || 'Aquí tienes lo que encontré:'}\n\n${lista}\n\n🛒 Escribe \`agregar 1\` o \`agregar 1, cantidad 1 o 2 o 3...\` para añadir al carrito`;
 
-        return respuestaFinal;
-
-    } catch (error) {
-        console.error("Error en conectarConOpenAI:", error);
-        return "Lo siento, ocurrió un error al procesar tu solicitud.";
+    } catch (err) {
+        console.error('Error OpenAI:', err.response?.data || err.message);
+        return "❌ Error temporal. Inténtalo de nuevo en unos segundos.";
     }
 }
 
+// --- AGREGAR AL CARRITO ---
+async function manejarAgregarCarrito(mensaje, id) {
+    const ctx = userContext.get(id);
+    if (!ctx.productosRecientes || ctx.productosRecientes.length === 0) {
+        return "⚠️ Primero busca un producto para poder agregarlo.";
+    }
 
-// --- INICIO DE LA APLICACIÓN ---
+    const numeros = mensaje.match(/\d+/g);
+    if (!numeros) return "❌ Dime el número del producto. Ej: *agregar 2*";
+
+    const index = parseInt(numeros[0]) - 1;
+    if (index < 0 || index >= ctx.productosRecientes.length) {
+        return `❌ Elige un número entre 1 y ${ctx.productosRecientes.length}`;
+    }
+
+    let cantidad = 1;
+    if (numeros.length > 1) cantidad = parseInt(numeros[1]);
+    const cantidadMatch = mensaje.match(/cantidad\s+(\d+)/i);
+    if (cantidadMatch) cantidad = parseInt(cantidadMatch[1]);
+
+    const producto = ctx.productosRecientes[index];
+    if (cantidad > parseInt(producto.Stock)) {
+        return `⚠️ Solo hay ${producto.Stock} unidades disponibles de *${producto.Nombre_Producto}*`;
+    }
+
+    const item = {
+        ID_Producto: producto.ID_Producto,
+        Nombre: producto.Nombre_Producto,
+        PrecioUnitario: parseFloat(producto.Precio),
+        Cantidad: cantidad,
+        Stock: producto.Stock
+    };
+
+    const existente = ctx.carrito.find(i => i.ID_Producto === item.ID_Producto);
+    if (existente) existente.Cantidad += cantidad;
+    else ctx.carrito.push(item);
+
+    const total = ctx.carrito.reduce((t, i) => t + (i.Cantidad * i.PrecioUnitario), 0).toFixed(2);
+
+    return `✅ Agregado: ${cantidad} × ${producto.Nombre_Producto}\n\n🛒 Carrito (${ctx.carrito.length} items)\nTotal: *$${total}*\n\nEscribe *finalizar* cuando termines`;
+}
+
+// --- FINALIZAR PEDIDO ---
+async function manejarFinalizarPedido(id) {
+    const ctx = userContext.get(id);
+    if (!ctx.carrito || ctx.carrito.length === 0) {
+        return "🛒 Tu carrito está vacío.";
+    }
+
+    const total = ctx.carrito.reduce((t, i) => t + (i.Cantidad * i.PrecioUnitario), 0);
+
+    const pedido = {
+        ID_Pedido: Date.now().toString(),
+        Timestamp: new Date().toISOString(),
+        ID_Cliente: id,
+        carrito: ctx.carrito,
+        Total: total,
+        Estado: "Pendiente"
+    };
+
+    const exito = await registrarPedido(pedido);
+    if (exito) {
+        for (const item of ctx.carrito) {
+            const nuevoStock = parseInt(item.Stock) - item.Cantidad;
+            await actualizarStock(item.ID_Producto, nuevoStock);
+        }
+
+        ctx.carrito = [];
+        ctx.menuActual = 'main';
+
+        return `✅ ¡Pedido recibido!\nID: ${pedido.ID_Pedido}\nTotal: $${total.toFixed(2)}\n\nEn breve te contactamos.\n¡Gracias por tu compra!`;
+    } else {
+        return "❌ Error al registrar el pedido. Intenta de nuevo.";
+    }
+}
+
+// --- INICIO ---
+async function initializeApp() {
+    console.log('Cargando información de la empresa desde Google Sheets...');
+    empresaInfo = await getEmpresaInfo();
+    console.log('Datos cargados. Iniciando WhatsApp...');
+    connectToWhatsApp();
+}
+
 initializeApp();
