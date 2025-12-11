@@ -201,7 +201,7 @@ async function manejarOpcionRapida(sock, id, opcionKey) {
                 await sock.sendMessage(id, {
                     document: { url: empresaInfo.catalogo_url },
                     fileName: empresaInfo.catalogo_nombre || "Catálogo.pdf",
-                    caption: "📄 Aquí tienes nuestro catálogo completo en PDF.\n¡Explora todos nuestros productos!"
+                    caption: "📄 Aquí tienes nuestro servicio completo en PDF.\n¡Explora nuestros servicios y no te quedes atras!"
                 });
                 return;
             } else {
@@ -220,7 +220,7 @@ async function enviarMenu(sock, id, menuKey, nombre = '') {
 
     if (menuKey === 'main') {
         const nombreEmpresa = empresaInfo.nombre || 'Nuestra Tienda';
-        texto = `¡Hola${nombre ? ' ' + nombre : ''}! 👋\n\nBienvenido a *${nombreEmpresa}* 🔥\n\n¿Qué necesitas hoy?\n\n`;
+        texto = `¡Hola ${nombre ? ' ' + nombre : ''}! 👋\nBienvenido a nuestro demo de *${nombreEmpresa}* LATAM. (aquí puedes realizar pruebas y funcionamiento)\n\n¿Qué necesitas hoy?\n\n`;
         texto += Object.entries(menuData.main.options)
             .map(([key, opt]) => `*${key}* ${opt.text}`)
             .join('\n');
@@ -236,11 +236,11 @@ async function enviarMenu(sock, id, menuKey, nombre = '') {
 const menuData = {
     main: {
         options: {
-            'A': { text: '🔥 Ver productos y ofertas', submenu: 'buscar_producto' },
+            'A': { text: '🔥 Descubre ofertas con IA', submenu: 'buscar_producto' },
             'B': { text: '📍 ¿Dónde estamos?', action: 'ubicacion' },
             'C': { text: '🕒 Horarios de atención', action: 'horarios' },
-            'D': { text: '📞 Contacto e info', action: 'contacto' },
-            'E': { text: '📄 Ver catálogo PDF', action: 'catalogo' }
+            'D': { text: '📞 Contactanos', action: 'contacto' },
+            'E': { text: '📄 Información de Servicio', action: 'catalogo' }
         }
     },
     buscar_producto: {
